@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'openapi.yaml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: shortlink_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: cd app && npm ci
+
+      - name: Generate Prisma client
+        run: cd app && npx prisma generate
+
+      - name: Lint
+        run: cd app && npx eslint . --max-warnings=0
+
+      - name: Typecheck
+        run: cd app && npx tsc --noEmit
+
+      - name: Unit tests
+        run: cd app && npx vitest run --coverage
+
+      - name: Integration tests
+        run: cd app && npx vitest run --config vitest.integration.config.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/shortlink_test

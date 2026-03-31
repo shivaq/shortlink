@@ -1,0 +1,21 @@
+{
+  "interactiveLogin": true,
+  "httpServer": "NettyWrapper",
+  "tokenCallbacks": [
+    {
+      "issuerId": "shortlink-dev",
+      "tokenExpiry": 86400,
+      "requestMappings": [
+        {
+          "requestParam": "client_id",
+          "match": "shortlink-local",
+          "claims": {
+            "sub": "local-test-user",
+            "email": "dev@example.com",
+            "name": "Local Dev User"
+          }
+        }
+      ]
+    }
+  ]
+}

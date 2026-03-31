@@ -1,0 +1,74 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write  # Required for Workload Identity Federation
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: development
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker asia-northeast1-docker.pkg.dev --quiet
+
+      - name: Install dependencies
+        run: cd app && npm ci
+
+      - name: Run tests
+        run: cd app && npx vitest run
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Docker build and push
+        env:
+          IMAGE: asia-northeast1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/shortlink/app:${{ github.sha }}
+        run: |
+          docker build -t "$IMAGE" ./app
+          docker push "$IMAGE"
+
+      - name: Run DB migrations
+        run: cd app && npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Deploy to Cloud Run
+        env:
+          IMAGE: asia-northeast1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/shortlink/app:${{ github.sha }}
+        run: |
+          gcloud run deploy shortlink \
+            --image "$IMAGE" \
+            --region asia-northeast1 \
+            --project ${{ vars.GCP_PROJECT_ID }} \
+            --quiet
+
+      - name: Smoke test
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://dev.short.example/api/healthz)
+          if [ "$STATUS" != "200" ]; then
+            echo "Smoke test failed: /api/healthz returned $STATUS"
+            exit 1
+          fi
+          echo "Smoke test passed"

@@ -1,0 +1,52 @@
+# Local development stubs — run `docker compose up` to start full stack
+# No cloud connection required for local development after Phase 0 bootstrap.
+
+services:
+  # stub: postgres
+  # api_version:   PostgreSQL 15
+  # sdk_version:   prisma@x.x.x  (fill in after npm install)
+  # stub_tool:     postgres:15 (official Docker image)
+  # created:       2026-04-01
+  # last_verified: 2026-04-01
+  # behaviors_not_stubbed:
+  #   - Cloud SQL Auth Proxy connection handling (test in dev with real Cloud SQL)
+  #   - IAM database authentication (dev uses password auth; prod uses WIF)
+  #   - Connection pool under concurrent load (test in dev with k6)
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: shortlink
+      POSTGRES_PASSWORD: shortlink
+      POSTGRES_DB: shortlink
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shortlink"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # stub: auth0
+  # api_version:   OIDC Core 1.0
+  # sdk_version:   @auth0/nextjs-auth0@x.x.x  (fill in after npm install)
+  # stub_tool:     mock-oauth2-server (latest)
+  # created:       2026-04-01
+  # last_verified: 2026-04-01
+  # behaviors_not_stubbed:
+  #   - JWKS key rotation (verify in dev: revoke Auth0 signing key, confirm app recovers)
+  #   - Token refresh expiry edge cases (test with short-lived tokens in dev)
+  #   - Google/GitHub provider-specific claims (sub format differs by provider)
+  auth0-stub:
+    image: ghcr.io/navikt/mock-oauth2-server:latest
+    ports:
+      - "8080:8080"
+    environment:
+      SERVER_PORT: 8080
+      JSON_CONFIG_PATH: /config/config.json
+    volumes:
+      - ./stubs/auth0/config.json:/config/config.json:ro
+
+volumes:
+  postgres_data:

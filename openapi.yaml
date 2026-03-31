@@ -1,0 +1,374 @@
+openapi: "3.0.3"
+info:
+  title: Shortlink API
+  description: |
+    URL shortener API for creating, listing, and deleting short links.
+    Supports two auth methods: OAuth (Auth0) for human users via web UI,
+    and API keys for AI agents and CI/CD automation.
+  version: "1.0.0"
+  contact:
+    url: https://github.com/shivaq/shortlink
+
+servers:
+  - url: https://short.example
+    description: Production
+  - url: https://dev.short.example
+    description: Development
+
+security:
+  - BearerAuth: []
+  - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Auth0 JWT — obtain via /api/auth/login (session cookie-based for web UI)
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key issued via POST /api/keys — format "sk_" + 32 random chars
+
+  parameters:
+    AcceptLanguage:
+      name: Accept-Language
+      in: header
+      required: false
+      schema:
+        type: string
+        enum: [en, ja]
+        default: en
+      description: |
+        Locale for human-readable `message` fields in error responses.
+        The `error` code is always English regardless of this header.
+        AI agents should omit this header or send `en`.
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message, request_id]
+      properties:
+        error:
+          type: string
+          description: Machine-readable error code (always English)
+          example: invalid_url
+        message:
+          type: string
+          description: Human-readable description (locale-aware)
+          example: "The provided URL is not valid"
+        request_id:
+          type: string
+          description: Unique request identifier for debugging
+          example: req_abc123def456
+        details:
+          type: array
+          description: Field-level validation errors (only on 400)
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+                example: url
+              reason:
+                type: string
+                example: must start with http:// or https://
+
+    Link:
+      type: object
+      required: [id, slug, original_url, short_url, click_count, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+          example: my-link
+        original_url:
+          type: string
+          format: uri
+          example: https://example.com/long-page
+        short_url:
+          type: string
+          format: uri
+          description: Full short URL (base URL + slug)
+          example: https://short.example/my-link
+        click_count:
+          type: integer
+          example: 42
+        created_at:
+          type: string
+          format: date-time
+
+    LinkList:
+      type: object
+      required: [items, total, page, per_page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Link"
+        total:
+          type: integer
+          example: 15
+        page:
+          type: integer
+          example: 1
+        per_page:
+          type: integer
+          example: 20
+
+    ApiKey:
+      type: object
+      required: [key_prefix, name, created_at]
+      properties:
+        key_prefix:
+          type: string
+          description: Display identifier (sk_ + last 4 of hash)
+          example: sk_...a1b2
+        name:
+          type: string
+          example: ci-deploy-key
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+        requests_total:
+          type: integer
+          description: Total API calls made with this key
+          example: 1482
+
+paths:
+  /api/links:
+    get:
+      summary: List all links owned by the authenticated user
+      operationId: listLinks
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 1, minimum: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, default: 20, minimum: 1, maximum: 100 }
+      responses:
+        "200":
+          description: Paginated list of links
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LinkList"
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    post:
+      summary: Create a new short link
+      operationId: createLink
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, format: uuid }
+          description: Optional UUID for safe retries. Same key + same body = same response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  example: https://example.com/my-long-page
+                slug:
+                  type: string
+                  description: Custom slug (3-50 chars, alphanumeric + hyphens). Auto-generated (7 chars) if omitted.
+                  example: my-link
+                  pattern: "^[a-zA-Z0-9-]{3,50}$"
+                  minLength: 3
+                  maxLength: 50
+      responses:
+        "201":
+          description: Link created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Link"
+        "400":
+          description: Invalid input (bad URL, invalid slug format)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Slug already taken or idempotency key mismatch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Rate limited
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds to wait before retrying
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/links/{id}:
+    get:
+      summary: Get a single link by ID
+      operationId: getLink
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Link details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Link"
+        "404":
+          description: Link not found
+
+    delete:
+      summary: Delete a link (with audit log)
+      operationId: deleteLink
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Deleted successfully
+        "403":
+          description: Not owner of this link
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Link not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/keys:
+    get:
+      summary: List API keys for the authenticated user
+      operationId: listApiKeys
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of API keys (never includes the full key)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiKey"
+
+    post:
+      summary: Create a new API key
+      operationId: createApiKey
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: Optional label for the key (e.g. "ci-deploy-key")
+                  example: ci-deploy-key
+      responses:
+        "201":
+          description: API key created. The full key is returned ONLY in this response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    description: Key UUID (use for DELETE /api/keys/{id})
+                  key:
+                    type: string
+                    description: Full API key — store securely, shown only once
+                    example: sk_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+                  key_prefix:
+                    type: string
+                    example: sk_...o5p6
+                  name:
+                    type: string
+                  created_at:
+                    type: string
+                    format: date-time
+
+  /api/keys/{id}:
+    delete:
+      summary: Revoke an API key
+      operationId: revokeApiKey
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Key revoked
+        "404":
+          description: Key not found
+
+  /healthz:
+    get:
+      summary: Health check endpoint
+      operationId: healthCheck
+      security: []
+      responses:
+        "200":
+          description: Service healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+                  db: { type: string, enum: [connected] }
+                  version: { type: string }
+                  timestamp: { type: string, format: date-time }
+        "503":
+          description: Service unhealthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [error] }
+                  db: { type: string }
+                  version: { type: string }
+                  timestamp: { type: string, format: date-time }
